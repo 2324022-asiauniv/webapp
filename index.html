@@ -135,6 +135,9 @@
         const winMessage = document.getElementById('win-message');
         const shuffleBtn = document.getElementById('shuffle-btn');
 
+        // デフォルトの美しいイラスト (Unsplashより軽量なプレースホルダー画像)
+        const DEFAULT_IMAGE = "https://images.unsplash.com/photo-1579783902614-a3fb3927b6a5?q=80&w=800&auto=format&fit=crop";
+
         let pieces = [];
         let gridSize = 4;
         let imageSrc = '';
@@ -337,9 +340,7 @@
             }
         });
 
-        // Initial setup
-        resizeContainer();
-        
-    </script>
-</body>
-</html>
+        // Initial setup on load - Use default image so the game starts immediately
+        window.onload = function() {
+            resizeContainer();
+            initPuzzle(DEFAULT_IMAGE);
