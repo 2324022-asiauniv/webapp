@@ -1,0 +1,345 @@
+<!DOCTYPE html>
+<html lang="ja">
+<head>
+    <meta charset="UTF-8">
+    <meta name="viewport" content="width=device-width, initial-scale=1.0">
+    <title>AI Jigsaw Puzzle</title>
+    <script src="https://cdn.tailwindcss.com"></script>
+    <style>
+        :root {
+            --bg-color: #f8fafc;
+            --primary-color: #4f46e5;
+        }
+        body {
+            background-color: var(--bg-color);
+            touch-action: none; /* Prevent scrolling while dragging on mobile */
+            overflow-x: hidden;
+        }
+        #puzzle-container {
+            position: relative;
+            background: #fff;
+            box-shadow: 0 10px 25px -5px rgba(0, 0, 0, 0.1), 0 8px 10px -6px rgba(0, 0, 0, 0.1);
+            overflow: hidden;
+            border-radius: 8px;
+            margin: 0 auto;
+        }
+        .piece {
+            position: absolute;
+            cursor: grab;
+            user-select: none;
+            transition: box-shadow 0.2s;
+            z-index: 10;
+        }
+        .piece:active {
+            cursor: grabbing;
+            z-index: 100;
+            box-shadow: 0 20px 25px -5px rgba(0, 0, 0, 0.2);
+        }
+        .piece.snapped {
+            z-index: 1;
+            cursor: default;
+            pointer-events: none;
+        }
+        #loading-overlay {
+            display: none;
+            position: fixed;
+            inset: 0;
+            background: rgba(255, 255, 255, 0.8);
+            z-index: 1000;
+            flex-direction: column;
+            align-items: center;
+            justify-content: center;
+        }
+        .spinner {
+            border: 4px solid rgba(0, 0, 0, 0.1);
+            width: 36px;
+            height: 36px;
+            border-radius: 50%;
+            border-left-color: var(--primary-color);
+            animation: spin 1s linear infinite;
+        }
+        @keyframes spin {
+            0% { transform: rotate(0deg); }
+            100% { transform: rotate(360deg); }
+        }
+    </style>
+</head>
+<body class="p-4 md:p-8">
+
+    <div id="loading-overlay">
+        <div class="spinner mb-4"></div>
+        <p class="text-slate-600 font-medium">画像を生成中...</p>
+    </div>
+
+    <div class="max-w-4xl mx-auto">
+        <header class="text-center mb-8">
+            <h1 class="text-4xl font-bold text-slate-800 mb-2">AI Jigsaw Puzzle</h1>
+            <p class="text-slate-500">好きなテーマでパズルを作って遊びましょう</p>
+        </header>
+
+        <div class="bg-white p-6 rounded-2xl shadow-sm mb-8">
+            <div class="flex flex-wrap gap-4 items-end">
+                <div class="flex-1 min-w-[200px]">
+                    <label class="block text-sm font-medium text-slate-700 mb-1">パズルのテーマ</label>
+                    <input type="text" id="prompt-input" placeholder="例: 美しいサイバーパンクの街並み" 
+                           class="w-full px-4 py-2 border border-slate-300 rounded-lg focus:ring-2 focus:ring-indigo-500 focus:border-indigo-500 outline-none">
+                </div>
+                <div>
+                    <label class="block text-sm font-medium text-slate-700 mb-1">難易度</label>
+                    <select id="difficulty-select" class="px-4 py-2 border border-slate-300 rounded-lg outline-none bg-white">
+                        <option value="3">初級 (3x3)</option>
+                        <option value="4" selected>中級 (4x4)</option>
+                        <option value="6">上級 (6x6)</option>
+                        <option value="8">達人 (8x8)</option>
+                    </select>
+                </div>
+                <button id="generate-btn" class="bg-indigo-600 hover:bg-indigo-700 text-white px-6 py-2 rounded-lg font-bold transition">
+                    パズルを生成
+                </button>
+            </div>
+        </div>
+
+        <div id="game-area" class="hidden">
+            <div class="flex flex-col md:flex-row gap-6 items-start">
+                <div id="puzzle-container" style="width: 500px; height: 500px;"></div>
+                
+                <div class="flex-1 w-full space-y-6">
+                    <div class="bg-white p-4 rounded-xl shadow-sm">
+                        <h2 class="font-bold text-slate-800 mb-2">プレビュー</h2>
+                        <img id="preview-img" class="w-full rounded-md opacity-50 border border-slate-200" alt="Preview">
+                        <div class="mt-4 flex justify-between items-center">
+                            <span class="text-sm text-slate-500">進捗: <span id="progress-text">0/0</span></span>
+                            <button id="shuffle-btn" class="text-sm bg-slate-100 hover:bg-slate-200 px-3 py-1 rounded transition text-slate-700">
+                                シャッフル
+                            </button>
+                        </div>
+                    </div>
+                    <div id="win-message" class="hidden bg-green-100 border border-green-200 text-green-700 p-4 rounded-xl text-center font-bold text-lg animate-bounce">
+                        🎉 おめでとう！パズル完成！
+                    </div>
+                </div>
+            </div>
+        </div>
+    </div>
+
+    <script>
+        const apiKey = ""; // Runtime provides the key
+        const promptInput = document.getElementById('prompt-input');
+        const generateBtn = document.getElementById('generate-btn');
+        const difficultySelect = document.getElementById('difficulty-select');
+        const loadingOverlay = document.getElementById('loading-overlay');
+        const puzzleContainer = document.getElementById('puzzle-container');
+        const gameArea = document.getElementById('game-area');
+        const previewImg = document.getElementById('preview-img');
+        const progressText = document.getElementById('progress-text');
+        const winMessage = document.getElementById('win-message');
+        const shuffleBtn = document.getElementById('shuffle-btn');
+
+        let pieces = [];
+        let gridSize = 4;
+        let imageSrc = '';
+        let containerSize = 500;
+        let pieceSize = 0;
+        let solvedCount = 0;
+
+        async function generateImage(prompt) {
+            loadingOverlay.style.display = 'flex';
+            try {
+                let retries = 0;
+                const maxRetries = 5;
+                const url = `https://generativelanguage.googleapis.com/v1beta/models/imagen-4.0-generate-001:predict?key=${apiKey}`;
+                const payload = {
+                    instances: [{ prompt: prompt }],
+                    parameters: { sampleCount: 1 }
+                };
+
+                while (retries < maxRetries) {
+                    try {
+                        const response = await fetch(url, {
+                            method: 'POST',
+                            headers: { 'Content-Type': 'application/json' },
+                            body: JSON.stringify(payload)
+                        });
+                        if (!response.ok) throw new Error('API request failed');
+                        const data = await response.json();
+                        return `data:image/png;base64,${data.predictions[0].bytesBase64Encoded}`;
+                    } catch (e) {
+                        retries++;
+                        if (retries === maxRetries) throw e;
+                        await new Promise(res => setTimeout(res, Math.pow(2, retries) * 1000));
+                    }
+                }
+            } catch (error) {
+                console.error(error);
+                alert('画像の生成に失敗しました。時間をおいて再度お試しください。');
+                return null;
+            } finally {
+                loadingOverlay.style.display = 'none';
+            }
+        }
+
+        function initPuzzle(imgUrl) {
+            imageSrc = imgUrl;
+            gridSize = parseInt(difficultySelect.value);
+            pieceSize = containerSize / gridSize;
+            previewImg.src = imgUrl;
+            winMessage.classList.add('hidden');
+            
+            puzzleContainer.innerHTML = '';
+            pieces = [];
+            solvedCount = 0;
+            updateProgress();
+
+            for (let y = 0; y < gridSize; y++) {
+                for (let x = 0; x < gridSize; x++) {
+                    const piece = document.createElement('div');
+                    piece.className = 'piece';
+                    piece.style.width = `${pieceSize}px`;
+                    piece.style.height = `${pieceSize}px`;
+                    piece.style.backgroundImage = `url(${imgUrl})`;
+                    piece.style.backgroundSize = `${containerSize}px ${containerSize}px`;
+                    piece.style.backgroundPosition = `-${x * pieceSize}px -${y * pieceSize}px`;
+                    piece.style.border = '0.5px solid rgba(255,255,255,0.3)';
+                    
+                    const data = {
+                        el: piece,
+                        correctX: x * pieceSize,
+                        correctY: y * pieceSize,
+                        currentX: 0,
+                        currentY: 0,
+                        isSnapped: false
+                    };
+                    
+                    piece.addEventListener('mousedown', startDrag(data));
+                    piece.addEventListener('touchstart', startDrag(data), {passive: false});
+                    
+                    pieces.push(data);
+                    puzzleContainer.appendChild(piece);
+                }
+            }
+
+            shufflePieces();
+            gameArea.classList.remove('hidden');
+            window.scrollTo({ top: gameArea.offsetTop - 20, behavior: 'smooth' });
+        }
+
+        function shufflePieces() {
+            pieces.forEach(p => {
+                p.isSnapped = false;
+                p.el.classList.remove('snapped');
+                // Random position in the container
+                const rx = Math.random() * (containerSize - pieceSize);
+                const ry = Math.random() * (containerSize - pieceSize);
+                movePiece(p, rx, ry);
+            });
+            solvedCount = 0;
+            updateProgress();
+            winMessage.classList.add('hidden');
+        }
+
+        function movePiece(p, x, y) {
+            p.currentX = x;
+            p.currentY = y;
+            p.el.style.transform = `translate(${x}px, ${y}px)`;
+        }
+
+        function startDrag(p) {
+            return function(e) {
+                if (p.isSnapped) return;
+                e.preventDefault();
+
+                const startX = e.type.includes('touch') ? e.touches[0].clientX : e.clientX;
+                const startY = e.type.includes('touch') ? e.touches[0].clientY : e.clientY;
+                const initialX = p.currentX;
+                const initialY = p.currentY;
+
+                p.el.style.zIndex = 1000;
+
+                const onMove = (moveEvent) => {
+                    const currentX = moveEvent.type.includes('touch') ? moveEvent.touches[0].clientX : moveEvent.clientX;
+                    const currentY = moveEvent.type.includes('touch') ? moveEvent.touches[0].clientY : moveEvent.clientY;
+                    
+                    const dx = currentX - startX;
+                    const dy = currentY - startY;
+                    
+                    movePiece(p, initialX + dx, initialY + dy);
+                };
+
+                const onEnd = () => {
+                    document.removeEventListener('mousemove', onMove);
+                    document.removeEventListener('mouseup', onEnd);
+                    document.removeEventListener('touchmove', onMove);
+                    document.removeEventListener('touchend', onEnd);
+
+                    p.el.style.zIndex = 10;
+                    checkSnap(p);
+                };
+
+                document.addEventListener('mousemove', onMove);
+                document.addEventListener('mouseup', onEnd);
+                document.addEventListener('touchmove', onMove, {passive: false});
+                document.addEventListener('touchend', onEnd);
+            };
+        }
+
+        function checkSnap(p) {
+            const threshold = 25;
+            const dx = Math.abs(p.currentX - p.correctX);
+            const dy = Math.abs(p.currentY - p.correctY);
+
+            if (dx < threshold && dy < threshold) {
+                movePiece(p, p.correctX, p.correctY);
+                p.isSnapped = true;
+                p.el.classList.add('snapped');
+                solvedCount++;
+                updateProgress();
+                
+                // Visual feedback for snapping
+                p.el.style.boxShadow = 'none';
+                p.el.style.border = 'none';
+
+                if (solvedCount === pieces.length) {
+                    winMessage.classList.remove('hidden');
+                }
+            }
+        }
+
+        function updateProgress() {
+            progressText.textContent = `${solvedCount} / ${pieces.length}`;
+        }
+
+        generateBtn.addEventListener('click', async () => {
+            const prompt = promptInput.value.trim() || "A beautiful landscape painting";
+            const imgUrl = await generateImage(prompt);
+            if (imgUrl) {
+                initPuzzle(imgUrl);
+            }
+        });
+
+        shuffleBtn.addEventListener('click', () => {
+            shufflePieces();
+        });
+
+        // Dynamic container sizing for mobile
+        function resizeContainer() {
+            const maxWidth = Math.min(window.innerWidth - 40, 500);
+            containerSize = maxWidth;
+            puzzleContainer.style.width = `${containerSize}px`;
+            puzzleContainer.style.height = `${containerSize}px`;
+            if (imageSrc) initPuzzle(imageSrc);
+        }
+
+        window.addEventListener('resize', () => {
+            // Only re-init if the size changed significantly to avoid jitter
+            const newWidth = Math.min(window.innerWidth - 40, 500);
+            if (Math.abs(newWidth - containerSize) > 50) {
+                resizeContainer();
+            }
+        });
+
+        // Initial setup
+        resizeContainer();
+        
+    </script>
+</body>
+</html>
